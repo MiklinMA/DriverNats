@@ -1,11 +1,16 @@
 import asyncio
 from nats.aio.client import Client as NATS
 from nats.aio.errors import ErrConnectionClosed, ErrTimeout, ErrNoServers
+import time
+from random import random
 
 nc = NATS()
+loop = None
 
 def logger(msg):
-    print(msg)
+    print("START:", msg.data.decode())
+    time.sleep(random())
+    print("FINISH:", msg.data.decode())
 
 async def run(loop):
 
@@ -14,7 +19,7 @@ async def run(loop):
 
   await nc.connect(io_loop=loop, verbose=True) # , servers=servers)
 
-  await nc.subscribe(">", "", logger)
+  await nc.subscribe(">", "pipe", logger)
 
 
 if __name__ == '__main__':
