@@ -1,19 +1,18 @@
 import worker
 
-@worker.api_method("api.user.event.get")
+@worker.method("api.user.event.get", send_found=False)
 def user_event(data):
     u_ref = data['Data']['u_ref']
     jdata = data['Data']['jdata']
 
-    subject = "ones.user." + u_ref
+    subject = "ones.user." + u_ref + ".event"
 
-    print(u_ref, jdata)
-
-    response = yield subject, jdata, True
+    response = yield subject, jdata, 2.0
     response = response and getattr(response, 'data', response)
+    response = response or b"not found"
 
-    print("RESPONSE: ", response)
+    print(u_ref, response.decode())
 
-    yield response or "not found"
+    yield response
 
 worker.start()

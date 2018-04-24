@@ -4,16 +4,15 @@ from nats.aio.errors import ErrConnectionClosed, ErrTimeout, ErrNoServers
 import signal
 import json
 import inspect
+import time
+import pdb
 
 methods = {}
 
 nc = NATS()
 
-class CallbackData:
-    pass
-
-def api_method(method):
-    def api_decorator(callback):
+def method(method, send_found=True):
+    def decorator(callback):
         async def wrapper(msg):
             subject = msg.subject
             reply = msg.reply
@@ -23,22 +22,13 @@ def api_method(method):
             except:
                 pass
 
-            # print("RUN", reply, 'working')
-            # await nc.publish(reply, b'working')
-            # print("OK", reply, 'working')
-
-            # res = callback(data)
-            # print(res)
-            # if res is None:
-            #     res = b"DONE"
-
-            # print("RUN", reply, res)
-            # await nc.publish(reply, res.encode())
-            # print("OK", reply, res)
+            if send_found:
+                await nc.publish(reply, b'found')
 
             async def publish_data(res):
                 s = reply
                 m = nc.publish
+                kw = {}
 
                 if res is None:
                     res = b"DONE"
@@ -49,14 +39,15 @@ def api_method(method):
                         res = res[1]
 
                     elif len(res) == 3:
-                        res = res[1]
                         m = nc.request
+                        kw['timeout'] = float(res[2])
+                        res = res[1]
 
                 if isinstance(res, str):
                     res = res.encode()
 
-                print(s, type(res), res)
-                return await m(s, res)
+                # print(s, type(res), res, kw)
+                return await m(s, res, **kw)
 
             if inspect.isgeneratorfunction(callback):
                 gen = callback(data)
@@ -65,11 +56,11 @@ def api_method(method):
                     while True:
                         res = gen.send(res)
                         res = await publish_data(res)
-                except StopIteration as e:
-                    pass
                 except ErrTimeout as e:
-                    res = gen.send('timeout')
+                    res = gen.send(b'timeout')
                     res = await publish_data(res)
+                except StopIteration:
+                    pass
                 except Exception as e:
                     print("ERROR", type(e), e)
 
@@ -80,31 +71,57 @@ def api_method(method):
 
         return wrapper
 
-    return api_decorator
+    return decorator
+
+# @method(">")
+# def test(data):
+#     print(data)
+#     return "OK"
 
 async def run(loop):
-    queue = ""
+    async def closed_cb():
+        print("Connection to NATS is closed.")
+        await asyncio.sleep(0.1, loop=loop)
+        loop.stop()
 
-    await nc.connect(io_loop=loop)
-    print("Connected to NATS at {}...".format(nc.connected_url.netloc))
-  
+    options = {
+        "name":"Worker",
+        "servers": ["nats://nero:4222"],
+        # "servers": ["nats://127.0.0.1:4222"],
+        "io_loop": loop,
+        "closed_cb": closed_cb
+    }
+
+    await nc.connect(**options)
+    print("Connected to NATS at {}".format(nc.connected_url.netloc))
+
+    queue = ""
     for method, callback in methods.items():
         print("Add subscriber:", method)
         await nc.subscribe(method, queue, callback)
 
+    def signal_handler():
+        if nc.is_closed:
+            return
+        print("Disconnecting...")
+        loop.create_task(nc.close())
+
+    for sig in ('SIGINT', 'SIGTERM'):
+        loop.add_signal_handler(getattr(signal, sig), signal_handler)
+
 def start():
-    if not len(methods):
-        print("API methods are not defined")
+    if not len(methods.keys()):
+        print("No methods defined")
+        test_run()
         return
-  
+
     loop = asyncio.get_event_loop()
     loop.run_until_complete(run(loop))
     try:
         loop.run_forever()
-    except Exception as e:
-        print("ERROR", e)
     finally:
         loop.close()
-  
+
 if __name__ == '__main__':
     start()
+
