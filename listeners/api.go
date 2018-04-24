@@ -15,7 +15,7 @@ import (
 	"github.com/nats-io/go-nats"
 )
 
-const TimeoutQueue = 3e+9
+const TimeoutQueue = 1e+9
 const TimeoutWork = 30e+9
 
 var con *nats.Conn
@@ -24,13 +24,6 @@ type Packet struct {
     Method string
     Data map[string]string
     Raw string
-}
-
-func failOnError(err error, msg string) {
-    if err != nil {
-        log.Fatalf("%s: %s", msg, err)
-        panic(fmt.Sprintf("%s: %s", msg, err))
-    }
 }
 
 func randomString(l int) string {
@@ -45,52 +38,38 @@ func randInt(min int, max int) int {
 	return min + rand.Intn(max-min)
 }
 
-func request_mq(subject string, data []byte) (result string, err error) {
+func request_mq(subject string, data []byte) (code int, result string) {
 
-    // log.Println(reflect.TypeOf(con))
+    subject_resp := subject + "." + randomString(10)
+    code = 200
 
-    subject_res := subject + "." + randomString(10)
-
-    log.Print(subject_res)
-    sub, err := con.SubscribeSync(subject_res)
+    sub, err := con.SubscribeSync(subject_resp)
     defer sub.Unsubscribe()
+    if nil != err {
+        return 500, err.Error()
+    }
 
-    err = con.PublishRequest(subject, subject_res, data)
+    err = con.PublishRequest(subject, subject_resp, data)
 
     res, err := sub.NextMsg(TimeoutQueue)
-    if err != nil {
-        log.Print("Request timed out: ", err)
-        result = "Not found"
-        return
+    if nil != err {
+        return 404, err.Error()
     }
+
     result = string(res.Data)
 
-    /*
-    // for len(result) >= 7 && result[:7] == "working" {
-    log.Print("Response: ", result)
-    for result == "working" {
+    for result == "found" {
         res, err := sub.NextMsg(TimeoutWork)
-
-        if err != nil {
-            result = "Working request timed out: " + err.Error()
-            log.Print(result)
-            break
+        if nil != err {
+            return 504, err.Error()
         }
 
         result = string(res.Data)
-
-        log.Print("Response: ", result)
     }
-    */
-
-    log.Print("Response: ", result)
     return
 }
 
-func on_response(w http.ResponseWriter, r *http.Request) {
-    // log.Print("Method URL Scheme")
-    // log.Printf("%s %s", r.Method, r.URL.Path, r.URL.Scheme)
-
+func parse_request(r *http.Request) (p Packet, err error) {
     method := ""
     method = fmt.Sprintf("%s.%s", html.EscapeString(r.URL.Path), r.Method)
     method = strings.ToLower(method)
@@ -98,15 +77,8 @@ func on_response(w http.ResponseWriter, r *http.Request) {
     method = strings.Replace(method, "/", ".", -1)
     method = strings.Replace(method, "_", ".", -1)
 
-    p := Packet{}
+    p = Packet{}
     p.Method = method
-
-    log.Printf("API method: %s", method)
-
-    // log.Print("Header  ")
-    // for k, v := range r.Header {
-    //     log.Printf(" %-20s : %s", k, v)
-    // }
 
     r.ParseForm()
     p.Data = make(map[string]string)
@@ -122,44 +94,56 @@ func on_response(w http.ResponseWriter, r *http.Request) {
         return
     }
     p.Raw = string(body[:])
+    return
+}
 
-    b, err := json.Marshal(p)
+func http_handler(w http.ResponseWriter, r *http.Request) {
+
+    p, err := parse_request(r)
     if nil != err {
-        fmt.Println("json err", err)
+        fmt.Println("parse error", err)
         return
     }
 
-    response := "DONE"
-    if method[:8] == "api.async" {
-        err = con.Publish(method, []byte(b))
-    } else {
-        response, err = request_mq(method, []byte(b))
-        if nil != err {
-            fmt.Println("Request error:", err)
-            http.NotFound(w, r)
-            return
-        }
+    log.Printf("API: %s", p.Method)
 
-        if response == "Not found" {
-            http.NotFound(w, r)
-            return
-        }
+    data, err := json.Marshal(p)
+    if nil != err {
+        fmt.Println("json error", err)
+        return
     }
 
-    /// w.WriteHeader(404)
-    fmt.Fprintf(w, "%s", response)
+    if p.Method[:8] == "api.async" {
+        err = con.Publish(p.Method, []byte(data))
+        fmt.Fprintf(w, "OK")
+    } else {
+        code, response := request_mq(p.Method, []byte(data))
+        w.WriteHeader(code)
+        fmt.Fprintf(w, "%s", response)
+        log.Printf("API: %s %s", p.Method, response)
+    }
 }
 
 func main() {
+    var err error
+    nats_host := nats.DefaultURL
 
-	con, _ = nats.Connect(nats.DefaultURL)
-	log.Println("Connected to " + nats.DefaultURL)
+    con, err = nats.Connect(nats_host)
+    if nil != err {
+        log.Println("Connection to " + nats_host + " failed")
+        return
+    }
 
-	defer con.Close()
+	log.Println("Connected to " + nats_host)
 
-    http.HandleFunc("/", on_response)
+	defer func() {
+        con.Close()
+        log.Println("Disconnected from " + nats_host)
+    }()
 
-    log.Println("Listening on " + "*:8888")
+    http.HandleFunc("/", http_handler)
+
+    log.Println("Listening on " + ":8888")
     log.Fatal(http.ListenAndServe(":8888", nil))
 }
 
