@@ -43,10 +43,16 @@ def method(method, send_found=True):
                         kw['timeout'] = float(res[2])
                         res = res[1]
 
+                if isinstance(res, (int, float)):
+                    res = str(res)
+
                 if isinstance(res, str):
                     res = res.encode()
 
-                # print(s, type(res), res, kw)
+                if not isinstance(res, bytes):
+                    print("ERROR:", s, type(res), res, kw)
+                    return
+
                 return await m(s, res, **kw)
 
             if inspect.isgeneratorfunction(callback):
@@ -65,7 +71,8 @@ def method(method, send_found=True):
                     print("ERROR", type(e), e)
 
             else:
-                await publish_data(callback(data))
+                res = callback(data)
+                await publish_data(res)
 
         methods[method] = wrapper
 
@@ -112,7 +119,6 @@ async def run(loop):
 def start():
     if not len(methods.keys()):
         print("No methods defined")
-        test_run()
         return
 
     loop = asyncio.get_event_loop()
