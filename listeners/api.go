@@ -7,7 +7,7 @@ import (
     "html"
     "time"
     "strings"
-    // "strconv"
+    "strconv"
     // "reflect"
 	"math/rand"
     "net/http"
@@ -27,6 +27,7 @@ var con *nats.Conn
 type Packet struct {
     Method string
     Data map[string]string
+    Header map[string]string
     Raw string
 }
 
@@ -71,6 +72,12 @@ func request_mq(subject string, data []byte) (code int, result string) {
 
         result = string(res.Data)
     }
+
+    code, err = strconv.Atoi(result)
+    if nil != err {
+        return 200, result
+    }
+
     return
 }
 
@@ -89,6 +96,11 @@ func parse_request(r *http.Request) (p Packet, err error) {
     p.Data = make(map[string]string)
     for k, v := range r.Form {
         p.Data[k] = v[0]
+    }
+
+    p.Header = make(map[string]string)
+    for k, v := range r.Header {
+        p.Header[k] = v[0]
     }
 
     defer r.Body.Close()
@@ -122,12 +134,12 @@ func http_handler(w http.ResponseWriter, r *http.Request) {
         err = con.Publish(p.Method, []byte(data))
         fmt.Fprintf(w, "OK")
     } else {
-        count_in = count_in + 1
+        // count_in = count_in + 1
         code, response := request_mq(p.Method, []byte(data))
         w.WriteHeader(code)
         fmt.Fprintf(w, "%s", response)
-        log.Printf("API: %s %s", p.Method, response)
-        count_out = count_out + 1
+        // log.Printf("API: %s %s", p.Method, response)
+        // count_out = count_out + 1
     }
 }
 
@@ -142,7 +154,7 @@ func main() {
     var err error
     nats_host := nats.DefaultURL
 
-    go counter()
+    // go counter()
 
     con, err = nats.Connect(nats_host)
     if nil != err {
