@@ -5,7 +5,9 @@ import (
 	"fmt"
 
     "html"
+    "time"
     "strings"
+    // "strconv"
     // "reflect"
 	"math/rand"
     "net/http"
@@ -18,6 +20,8 @@ import (
 const TimeoutQueue = 1e+9
 const TimeoutWork = 30e+9
 
+var count_in int
+var count_out int
 var con *nats.Conn
 
 type Packet struct {
@@ -29,7 +33,8 @@ type Packet struct {
 func randomString(l int) string {
 	bytes := make([]byte, l)
 	for i := 0; i < l; i++ {
-		bytes[i] = byte(randInt(65, 90))
+		bytes[i] = byte(randInt(97, 122))
+		// bytes[i] = byte(randInt(65, 90))
 	}
 	return string(bytes)
 }
@@ -39,8 +44,8 @@ func randInt(min int, max int) int {
 }
 
 func request_mq(subject string, data []byte) (code int, result string) {
-
-    subject_resp := subject + "." + randomString(10)
+    subject_resp := "_" + subject + "." + randomString(20)
+    // subject_resp := "_" + subject + "." + strconv.Itoa(int(time.Now().UnixNano()))
     code = 200
 
     sub, err := con.SubscribeSync(subject_resp)
@@ -61,7 +66,7 @@ func request_mq(subject string, data []byte) (code int, result string) {
     for result == "found" {
         res, err := sub.NextMsg(TimeoutWork)
         if nil != err {
-            return 504, err.Error()
+            return 504, subject_resp // err.Error()
         }
 
         result = string(res.Data)
@@ -117,16 +122,27 @@ func http_handler(w http.ResponseWriter, r *http.Request) {
         err = con.Publish(p.Method, []byte(data))
         fmt.Fprintf(w, "OK")
     } else {
+        count_in = count_in + 1
         code, response := request_mq(p.Method, []byte(data))
         w.WriteHeader(code)
         fmt.Fprintf(w, "%s", response)
         log.Printf("API: %s %s", p.Method, response)
+        count_out = count_out + 1
+    }
+}
+
+func counter() {
+    for true {
+        fmt.Println(count_in, count_out)
+        time.Sleep(5 * time.Second)
     }
 }
 
 func main() {
     var err error
     nats_host := nats.DefaultURL
+
+    go counter()
 
     con, err = nats.Connect(nats_host)
     if nil != err {
